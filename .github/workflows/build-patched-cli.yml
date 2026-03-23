@@ -1,0 +1,36 @@
+name: Build Patched CLI
+
+on:
+  push:
+    branches: [ fix/* ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 24
+        cache: 'yarn'
+        cache-dependency-path: yarn.lock
+
+    - name: Install dependencies
+      run: yarn install --immutable
+
+    - name: Build CLI package
+      run: yarn workspace happy build
+
+    - name: Pack CLI package
+      run: yarn workspace happy pack
+
+    - name: Upload tgz artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: happy-coder-patched
+        path: packages/happy-cli/*.tgz
+        retention-days: 30

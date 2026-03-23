@@ -1,4 +1,5 @@
 import { resolve } from 'path';
+import { homedir } from 'os';
 
 export interface PathValidationResult {
     valid: boolean;
@@ -7,25 +8,38 @@ export interface PathValidationResult {
 }
 
 /**
- * Validates that a path is within the allowed working directory
+ * Validates that a path is within the allowed working directory or the
+ * user's home directory.
+ *
+ * NOTE: The home-directory fallback is intentionally broad. The daemon's
+ * workingDirectory is its startup cwd, but sessions (and their worktrees)
+ * can live anywhere under $HOME. A proper fix would track each session's
+ * directory and validate against that set, but this simple approach is
+ * sufficient for single-user machines where happy-coder is typically run.
+ *
  * @param targetPath - The path to validate (can be relative or absolute)
- * @param workingDirectory - The session's working directory (must be absolute)
+ * @param workingDirectory - The primary working directory (must be absolute)
  * @returns Validation result
  */
 export function validatePath(targetPath: string, workingDirectory: string): PathValidationResult {
-    // Resolve both paths to absolute paths to handle path traversal attempts
     const resolvedTarget = resolve(workingDirectory, targetPath);
     const resolvedWorkingDir = resolve(workingDirectory);
 
-    // Check if the resolved target path starts with the working directory
-    // This prevents access to files outside the working directory
-    if (!resolvedTarget.startsWith(resolvedWorkingDir + '/') && resolvedTarget !== resolvedWorkingDir) {
-        return {
-            valid: false,
-            resolvedPath: resolvedTarget,
-            error: `Access denied: Path '${targetPath}' is outside the working directory`
-        };
+    // Check primary working directory
+    if (resolvedTarget.startsWith(resolvedWorkingDir + '/') || resolvedTarget === resolvedWorkingDir) {
+        return { valid: true, resolvedPath: resolvedTarget };
     }
 
-    return { valid: true, resolvedPath: resolvedTarget };
+    // Allow any path under $HOME — sessions and worktrees can be anywhere
+    // under the user's home directory.
+    const home = homedir();
+    if (home && (resolvedTarget.startsWith(home + '/') || resolvedTarget === home)) {
+        return { valid: true, resolvedPath: resolvedTarget };
+    }
+
+    return {
+        valid: false,
+        resolvedPath: resolvedTarget,
+        error: `Access denied: Path '${targetPath}' is outside the working directory`
+    };
 }

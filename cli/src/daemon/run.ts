@@ -17,7 +17,7 @@ import { writeDaemonState, DaemonLocallyPersistedState, readDaemonState, acquire
 
 import { cleanupDaemonState, isDaemonRunningCurrentlyInstalledHappyVersion, stopDaemon } from './controlClient';
 import { startDaemonControlServer } from './controlServer';
-import { readFileSync } from 'fs';
+import { readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { projectPath } from '@/projectPath';
 import { getTmuxUtilities, isTmuxAvailable, parseTmuxSessionIdentifier, formatTmuxSessionIdentifier } from '@/utils/tmux';
@@ -396,23 +396,25 @@ export async function startDaemon(): Promise<void> {
           // 2. Regular spawn uses env: { ...process.env, ...extraEnv }
           // 3. tmux needs explicit environment via -e flags to ensure all variables are available
           const windowName = `happy-${Date.now()}-${agent}`;
-          const tmuxEnv: Record<string, string> = {};
+          // Pass only extra/override env vars via -e flags (auth tokens, profile settings).
+          const tmuxEnv: Record<string, string> = { ...extraEnv };
 
-          // Add all daemon environment variables (filtering out undefined)
-          for (const [key, value] of Object.entries(process.env)) {
-            if (value !== undefined) {
-              tmuxEnv[key] = value;
-            }
-          }
+          // Write full environment to a temp file to avoid tmux "command too long"
+          // when passing hundreds of -e flags. The temp file is sourced by the
+          // shell wrapper and then deleted.
+          const envFileContent = Object.entries({ ...process.env, ...extraEnv })
+            .filter(([k, v]) => v !== undefined && v !== null && /^[A-Z_][A-Z0-9_]*$/i.test(k))
+            .map(([k, v]) => `export ${k}=${JSON.stringify(v)}`)
+            .join('\n');
+          const envFilePath = `/tmp/happy_env_${Date.now()}_${process.pid}.sh`;
+          writeFileSync(envFilePath, envFileContent, { mode: 0o600 });
+          const wrappedCommand = `bash -c 'source ${envFilePath} && rm -f ${envFilePath} && exec ${fullCommand}'`;
 
-          // Add extra environment variables (these should already be filtered)
-          Object.assign(tmuxEnv, extraEnv);
-
-          const tmuxResult = await tmux.spawnInTmux([fullCommand], {
+          const tmuxResult = await tmux.spawnInTmux([wrappedCommand], {
             sessionName: tmuxSessionName,
             windowName: windowName,
             cwd: directory
-          }, tmuxEnv);  // Pass complete environment for tmux session
+          }, tmuxEnv);
 
           if (tmuxResult.success) {
             logger.debug(`[DAEMON RUN] Successfully spawned in tmux session: ${tmuxResult.sessionId}, PID: ${tmuxResult.pid}`);
